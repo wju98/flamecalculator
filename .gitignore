@@ -1,0 +1,8 @@
+config.py
+users.db
+equipstatreaderkey.json
+filteredcropped.png
+imagefromurl.png
+.idea/
+__pycache__/
+venv/
