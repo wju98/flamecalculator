@@ -9,7 +9,6 @@ from queue import Queue
 import sqlite3
 import config
 import tier_calculator
-import time
 import numpy as np
 import cv2
 
@@ -27,7 +26,7 @@ async def on_ready():
     conn.commit()
     c.close()
     print('We have logged in as {0.user}'.format(discord_client))
-    await discord_client.change_presence(activity=discord.Game(name='!flamehelp | always in beta'))
+    await discord_client.change_presence(activity=discord.Game(name='!flamehelp'))
 
 
 """
@@ -39,15 +38,14 @@ public commands:
 non public commands:
 !debug same as !flamescore, but prints out extra information along the process of finding the flame score
 !botstatistics command showing number of unique users and server count
-!translate takes an image and spits out the text, for debugging purpose, but its also kinda cool to showoff to others
 """
 
 stats = ['STR', 'DEX', 'INT', 'LUK', 'MaxHP', 'MaxMP', 'Weapon Attack', 'Magic Attack', 'Defense', 'Speed', 'Jump',
          'All Stats']
 check_stats = ['STR', 'TR', 'DEX', 'EX', 'INT', 'NT', 'LUK', 'UK', 'MAXHP', 'AXHP', 'MAXMP', 'AXMP', 'ATTACK', 'TTACK',
-              'MAGIC', 'AGIC', 'DEFENSE', 'EFENSE', 'SPEED', 'PEED', 'JUMP', 'UMP', 'ALL', 'AL', 'AI']
+               'MAGIC', 'AGIC', 'DEFENSE', 'EFENSE', 'SPEED', 'PEED', 'JUMP', 'UMP', 'ALL', 'AL', 'AI']
 flame_lines = ['STR', 'DEX', 'INT', 'LUK', 'STR+DEX', 'STR+INT', 'STR+LUK', 'DEX+INT', 'DEX+LUK', 'INT+LUK', 'MaxHP',
-              'MaxMP', 'Attack', 'Magic Attack', 'Defense', 'Speed', 'Jump', 'All Stats']
+               'MaxMP', 'Attack', 'Magic Attack', 'Defense', 'Speed', 'Jump', 'All Stats', 'Item Level Reduction']
 ignore_stats = ['BOSS', 'OSS', 'DAMAGE', 'AMAGE']
 
 
@@ -61,25 +59,31 @@ async def on_message(message):
         debug_mode = False
         if message.content.startswith('!debug'):
             debug_mode = True
-        userinput = getUserInputFromCommand(message.content)
-        if not message.attachments and not userinput:
+        user_input = get_user_input_from_message(message.content)
+        if not message.attachments and not user_input:
             await message.channel.send('No image was attached. To use this command, attach an image with the message' +
                                        ' or include the URL of the image.')
             return
         if message.attachments:
             imageURL = message.attachments[0].url
         else:
-            imageURL = userinput
-
-        # if imageURL[-4:] != '.png' and imageURL[-5:] != '.jpeg':
-        #     imageURL = imageURL + ".png"
+            imageURL = user_input
 
         try:
             im = Image.open(requests.get(imageURL, stream=True).raw)
-        except:
+        except Exception:
             await message.channel.send('Invalid URL')
             return
 
+        # start processing the original image using cloud vision API on separate thread, slowest step of this command
+        original = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
+        cv2.imwrite('imagefromurl.png', original)
+        queue_original = Queue()
+        original_thread = threading.Thread(target=lambda q, arg1: q.put(get_text_from_image(arg1)),
+                                           args=(queue_original, 'imagefromurl.png'))
+        original_thread.start()
+
+        # filter and crop image to only the flame numbers on image
         original = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2HSV)
         height, width, _ = original.shape
         lower = np.array([33, 210, 75])
@@ -95,148 +99,161 @@ async def on_message(message):
             await message.channel.send('No flame was detected.')
             return
 
-        queoriginal = Queue()
-        originalthread = threading.Thread(target=lambda q, arg1: q.put(getTextFromUrlForThread(arg1)),
-                                          args=(queoriginal, (message, True)))
-        originalthread.start()
-
-        filteredcropped = res[top:bottom, left:right]
-        cv2.imwrite('filteredcropped.png', filteredcropped)
+        filtered_cropped = res[top:bottom, left:right]
+        cv2.imwrite('filteredcropped.png', filtered_cropped)
         if debug_mode:
             await message.channel.send(file=discord.File('filteredcropped.png'))
 
-        result, valid = getNumberFromImage('filteredcropped.png')
+        result, valid = get_text_from_image('filteredcropped.png', True)
 
+        # begin processing filtercropped image for its text
         if not valid:
             await message.channel.send(result)
             return
         if debug_mode:
-            totaltext = result.text_annotations[0].description
-            await message.channel.send(totaltext)
+            await message.channel.send(result.text_annotations[0].description)
 
-        minytonumber = {}
-        for currline in result.text_annotations[1:]:
-            currnumber = getSingleValueFromLine(currline.description)
-            if currnumber > 0:
-                miny = minyfromvertices(currline.bounding_poly.vertices) + top
-                minytonumber[miny] = currnumber
+        # min_y represents the smallest y value from the bounding box for each number. It can also be viewed as the
+        # number of pixels from the top of the original image to the top of the number.
+        min_y_to_number = {}
+        for curr_line in result.text_annotations[1:]:
+            curr_number = 0
+            for char in curr_line.description:
+                if char.isdigit():
+                    curr_number *= 10
+                    curr_number += int(char)
+                if curr_number > 0 and not char.isdigit():
+                    break
 
-        if not minytonumber or not result.text_annotations:
+            if curr_number > 0:
+                miny = min_y_from_vertices(curr_line.bounding_poly.vertices) + top
+                min_y_to_number[miny] = curr_number
+
+        if not min_y_to_number or not result.text_annotations:
             await message.channel.send('No flame was detected.')
             return
 
         if debug_mode:
-            await message.channel.send(minytonumber)
+            await message.channel.send(min_y_to_number)
 
-        originalthread.join()
-        originaltext, originalvalid = queoriginal.get()
+        original_thread.join()
+        original_text, original_valid = queue_original.get()
 
-        if not originalvalid:
-            await message.channel.send(originaltext)
+        # if error from the OCR, print out the error message from the API.
+        if not original_valid:
+            await message.channel.send(original_text)
             return
 
-        minys = minytonumber.keys()
-        numberofflamevalues = len(minys)
-        target = min(minys) - 5
-        currminy = 0
+        list_of_min_y = min_y_to_number.keys()
+        num_of_flame_values = len(list_of_min_y)
+        target = min(list_of_min_y) - 5
+        curr_min_y = 0
         i = 0
-        while currminy < target:
+        # traverse curr_min_y to where the first flame value appears in the original image
+        while curr_min_y < target:
             i += 1
-            currminy = originaltext.text_annotations[i].bounding_poly.vertices[0].y
+            curr_min_y = original_text.text_annotations[i].bounding_poly.vertices[0].y
 
-        stattoflamevalue = {}
-        target = max(minys) + 5
-        while minys and currminy < target and i < len(originaltext.text_annotations):
-            currstat = originaltext.text_annotations[i].description.split(':')[0].upper()
-            currminy = minyfromvertices(originaltext.text_annotations[i].bounding_poly.vertices)
+        stat_to_flame_value = {}
+        target = max(list_of_min_y) + 5
+        # traverse through the remaining text in the original image to match the relevant stats to its flame values.
+        while list_of_min_y and curr_min_y < target and i < len(original_text.text_annotations):
+            curr_stat = original_text.text_annotations[i].description.split(':')[0].upper()
+            curr_min_y = min_y_from_vertices(original_text.text_annotations[i].bounding_poly.vertices)
 
             for offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]:
-                offsety = currminy + offset
-                if offsety in minys:
-                    if currstat in check_stats and currstat not in stattoflamevalue.keys():
-                        stattoflamevalue[currstat] = minytonumber[offsety]
-                        del minytonumber[offsety]
-                    elif currstat[1:] in check_stats and currstat[1:] not in stattoflamevalue.keys():
-                        stattoflamevalue[currstat[1:]] = minytonumber[offsety]
-                        del minytonumber[offsety]
-                    elif currstat in ignore_stats or currstat[1:] in ignore_stats:
-                        numberofflamevalues -= 1
-                        del minytonumber[offsety]
-            minys = minytonumber.keys()
+                offset_y = curr_min_y + offset
+                if offset_y in list_of_min_y:
+                    if curr_stat in check_stats and curr_stat not in stat_to_flame_value.keys():
+                        stat_to_flame_value[curr_stat] = min_y_to_number[offset_y]
+                        del min_y_to_number[offset_y]
+                    elif curr_stat[1:] in check_stats and curr_stat[1:] not in stat_to_flame_value.keys():
+                        stat_to_flame_value[curr_stat[1:]] = min_y_to_number[offset_y]
+                        del min_y_to_number[offset_y]
+                    elif curr_stat in ignore_stats or curr_stat[1:] in ignore_stats:
+                        num_of_flame_values -= 1
+                        del min_y_to_number[offset_y]
+            list_of_min_y = min_y_to_number.keys()
             i += 1
 
-        if len(stattoflamevalue.keys()) < numberofflamevalues:
+        if len(stat_to_flame_value.keys()) < num_of_flame_values:
             await message.channel.send('Mouse is covering the equip\'s stats.')
             return
 
         if debug_mode:
-            await message.channel.send(str(stattoflamevalue))
+            await message.channel.send(str(stat_to_flame_value))
 
-        # str, dex, int, luk, maxhp, maxmp, att, matt, def, speed, jump, allstat
-        equipstats = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
-        for k in stattoflamevalue.keys():
-            value = stattoflamevalue[k]
+        # str, dex, int, luk, maxhp, maxmp, att, matt, def, speed, jump, all stat
+        equip_stats = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        for k in stat_to_flame_value.keys():
+            value = stat_to_flame_value[k]
             if k in check_stats:
                 index = min(check_stats.index(k) // 2, 11)
-                equipstats[index] += value
+                equip_stats[index] += value
         if debug_mode:
-            await message.channel.send(str(equipstats))
+            await message.channel.send(str(equip_stats))
 
+        # get item level for flame tier calculation
+        equip_stats.append(0)
         try:
-            i = originaltext.text_annotations[0].description.index('LEV')
-            levelline = originaltext.text_annotations[0].description[i:]
-            i = levelline.index('\n')
-            levelline = levelline[:i]
-            levelnumbers = getMultiValuesFromLine(levelline)
-            if len(levelnumbers) > 2 and (levelnumbers[1] - levelnumbers[0]) % 5 == 0 and 0 < (levelnumbers[1] - levelnumbers[0]) < 40:
-                levelnumber = levelnumbers[1]
-            else:
-                levelnumber = levelnumbers[0]
-            if debug_mode:
-                await message.channel.send('Item Level: ' + str(levelnumber))
+            i = original_text.text_annotations[0].description.index('LEV')
+            line_with_level_num = original_text.text_annotations[0].description[i:]
+            i = line_with_level_num.index('\n')
+            line_with_level_num = line_with_level_num[:i]
+            level_numbers = getMultiValuesFromLine(line_with_level_num)
+            level_number = level_numbers[0]
+            if len(level_numbers) > 2 and (level_numbers[1] - level_numbers[0]) % 5 == 0 and 0 < (
+                    level_numbers[1] - level_numbers[0]) < 40:
+                level_number = level_numbers[1]
+                equip_stats[12] = level_numbers[1] - level_numbers[0]
 
-            identifiedflame = tier_calculator.analyze_flame(equipstats, levelnumber)
             if debug_mode:
-                await message.channel.send(identifiedflame)
+                await message.channel.send('Item Level: ' + str(level_number))
 
-            if not identifiedflame:
-                flametierreadable = 'Unable to determine flame tier. Did not read item level or flame correctly.'
+            identified_flame = tier_calculator.analyze_flame(equip_stats, level_number)
+            if debug_mode:
+                await message.channel.send(identified_flame)
+
+            if not identified_flame:
+                flame_tiers_for_embed = 'Unable to determine flame tier. Did not read item level or flame correctly.'
             else:
-                flametierreadable = ''
-                for i in range(18):
-                    if identifiedflame[i] != 0:
-                        flametierreadable += 'T' + str(identifiedflame[i]) + ' ' + flame_lines[i] + ', '
-                flametierreadable = flametierreadable[:-2]
+                flame_tiers_for_embed = ''
+                for i in range(19):
+                    if identified_flame[i] != 0:
+                        flame_tiers_for_embed += 'T' + str(identified_flame[i]) + ' ' + flame_lines[i] + ', '
+                flame_tiers_for_embed = flame_tiers_for_embed[:-2]
         except Exception:
-            flametierreadable = 'Unable to detect level of item.'
-        equipstatsreadable = ''
+            flame_tiers_for_embed = 'Unable to detect level of item.'
+        equip_stats_for_embed = ''
         percent = False
         for i in range(12):
-            value = equipstats[i]
+            value = equip_stats[i]
             if value > 0:
-                equipstatsreadable += stats[i] + ': ' + str(value) + ', '
+                equip_stats_for_embed += stats[i] + ': ' + str(value) + ', '
                 if i == 11:
                     percent = True
-        equipstatsreadable = equipstatsreadable[:-2]
+        equip_stats_for_embed = equip_stats_for_embed[:-2]
         if percent:
-            equipstatsreadable += '%'
+            equip_stats_for_embed += '%'
+        if equip_stats[12] > 0:
+            equip_stats_for_embed += ', ' + 'Item Level Reduction: -' + str(equip_stats[12])
 
-        flamescore = [0, 0, 0, 0]  # str, dex, int, luk
-        curruser = getCurrentUserFromUsername(message.author)
-        flamescore[0] = equipstats[0] + (equipstats[1] * curruser[1]) + (equipstats[6] * curruser[4]) + (
-                equipstats[11] * curruser[5])
-        flamescore[1] = equipstats[1] + (equipstats[0] * curruser[1]) + (equipstats[6] * curruser[4]) + (
-                equipstats[11] * curruser[5])
-        flamescore[2] = equipstats[2] + (equipstats[3] * curruser[1]) + (equipstats[7] * curruser[4]) + (
-                equipstats[11] * curruser[5]) + ((equipstats[4] + equipstats[5]) * curruser[3] / 1000)
-        flamescore[3] = equipstats[3] + (equipstats[1] * curruser[1]) + (equipstats[6] * curruser[4]) + (
-                equipstats[11] * curruser[5]) + (equipstats[0] * curruser[2])
-        flamescorereadable = str(round(max(flamescore), 2)) + ' ' + stats[flamescore.index(max(flamescore))]
+        flame_score = [0, 0, 0, 0]  # str, dex, int, luk
+        curr_user = get_stored_ratios_from_username(message.author)
+        flame_score[0] = equip_stats[0] + (equip_stats[1] * curr_user[1]) + (equip_stats[6] * curr_user[4]) + (
+                equip_stats[11] * curr_user[5])
+        flame_score[1] = equip_stats[1] + (equip_stats[0] * curr_user[1]) + (equip_stats[6] * curr_user[4]) + (
+                equip_stats[11] * curr_user[5])
+        flame_score[2] = equip_stats[2] + (equip_stats[3] * curr_user[1]) + (equip_stats[7] * curr_user[4]) + (
+                equip_stats[11] * curr_user[5]) + ((equip_stats[4] + equip_stats[5]) * curr_user[3] / 1000)
+        flame_score[3] = equip_stats[3] + (equip_stats[1] * curr_user[1]) + (equip_stats[6] * curr_user[4]) + (
+                equip_stats[11] * curr_user[5]) + (equip_stats[0] * curr_user[2])
+        flame_score_for_embed = str(round(max(flame_score), 2)) + ' ' + stats[flame_score.index(max(flame_score))]
 
         embed = discord.Embed()
-        embed.add_field(name="Flame Stats", value=equipstatsreadable, inline=False)
-        embed.add_field(name="Flame Tiers", value=flametierreadable, inline=False)
-        embed.add_field(name="Flame Score", value=flamescorereadable, inline=False)
+        embed.add_field(name="Flame Stats", value=equip_stats_for_embed, inline=False)
+        embed.add_field(name="Flame Tiers", value=flame_tiers_for_embed, inline=False)
+        embed.add_field(name="Flame Score", value=flame_score_for_embed, inline=False)
         await message.channel.send(embed=embed)
         return
 
@@ -250,9 +267,9 @@ async def on_message(message):
         embed.add_field(name="!setsecondary", value="Changes the user\'s secondary ratio. The value specified should"
                                                     " represent how much 1 secondary stat is worth in terms of main"
                                                     " stat.", inline=False)
-        embed.add_field(name="!settertiary", value="Changes the user\'s tertiary ratio. The value specified should"
-                                                   " represent how much 1 tertiary stat is worth in terms of main stat."
-                        , inline=False)
+        embed.add_field(name="!settertiary", value="Changes the user\'s tertiary ratio. The value specified should "
+                                                   "represent how much 1 tertiary stat is worth in terms of main "
+                                                   "stat.", inline=False)
         embed.add_field(name="!setmaxhp", value="Changes the user\'s maxHP ratio. The value specified should "
                                                 "represent how much 1000 maxHP is worth in terms of main stat.",
                         inline=False)
@@ -270,137 +287,88 @@ async def on_message(message):
             return
         c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM users")
-        numberofusers = c.fetchone()[0]
+        number_of_users = c.fetchone()[0]
         c.close()
-        botstats = 'Number of Users: ' + str(numberofusers) + '\n' \
-                                                              'Server Count: ' + str(len(discord_client.guilds))
-        await message.channel.send(botstats)
-        activeservers = discord_client.guilds
-        for guild in activeservers:
+        bot_stats = 'Number of Users: ' + str(number_of_users) + '\n' + 'Server Count: ' + str(
+            len(discord_client.guilds))
+        await message.channel.send(bot_stats)
+        active_servers = discord_client.guilds
+        for guild in active_servers:
             print(guild.name)
         return
 
-    if message.content.startswith('!translate'):
-        starttime = time.time()
-        texts, validurl = getTextFromURL(message)
-        print('this function took ' + str(time.time() - starttime) + ' seconds to run.')
-        if not validurl:
-            await message.channel.send(texts)
-            return
-        await message.channel.send("```\n" + str(texts) + "```")
-        return
-
-    if message.content.startswith('!flameratio') or message.content.startswith('!setratio') or message.content.startswith(
-            '!ratio'):
-        embed = getEmbedRatioFromUser(message.author)
+    if message.content.startswith('!flameratio') or message.content.startswith('!setratio') \
+            or message.content.startswith('!ratio'):
+        embed = get_embed_ratio_of_user(message.author)
         await message.channel.send(embed=embed)
         return
 
     if message.content.startswith('!setsecondary'):
-        returnmessage = setSpecifiedRatio(' secondary stat', message)
-        if isinstance(returnmessage, str):
-            await message.channel.send(returnmessage)
+        return_message = set_specified_ratio(' secondary stat', message)
+        if isinstance(return_message, str):
+            await message.channel.send(return_message)
         else:
-            await message.channel.send(embed=returnmessage)
+            await message.channel.send(embed=return_message)
         return
 
     if message.content.startswith('!settertiary'):
-        returnmessage = setSpecifiedRatio(' tertiary stat', message)
-        if isinstance(returnmessage, str):
-            await message.channel.send(returnmessage)
+        return_message = set_specified_ratio(' tertiary stat', message)
+        if isinstance(return_message, str):
+            await message.channel.send(return_message)
         else:
-            await message.channel.send(embed=returnmessage)
+            await message.channel.send(embed=return_message)
         return
 
     if message.content.startswith('!setmaxhp'):
-        returnmessage = setSpecifiedRatio(' maxhp', message)
-        if isinstance(returnmessage, str):
-            await message.channel.send(returnmessage)
+        return_message = set_specified_ratio(' maxhp', message)
+        if isinstance(return_message, str):
+            await message.channel.send(return_message)
         else:
-            await message.channel.send(embed=returnmessage)
+            await message.channel.send(embed=return_message)
         return
 
     if message.content.startswith('!setattack'):
-        returnmessage = setSpecifiedRatio(' attack', message)
-        if isinstance(returnmessage, str):
-            await message.channel.send(returnmessage)
+        return_message = set_specified_ratio(' attack', message)
+        if isinstance(return_message, str):
+            await message.channel.send(return_message)
         else:
-            await message.channel.send(embed=returnmessage)
+            await message.channel.send(embed=return_message)
         return
 
     if message.content.startswith('!setallstat'):
-        returnmessage = setSpecifiedRatio('% all stat', message)
-        if isinstance(returnmessage, str):
-            await message.channel.send(returnmessage)
+        return_message = set_specified_ratio('% all stat', message)
+        if isinstance(return_message, str):
+            await message.channel.send(return_message)
         else:
-            await message.channel.send(embed=returnmessage)
+            await message.channel.send(embed=return_message)
         return
 
 
-def getTextFromURL(message, bounds=False):
-    userinput = getUserInputFromCommand(message.content)
-    if not message.attachments and not userinput:
-        return 'No image was attached', False
-    if message.attachments:
-        imageURL = message.attachments[0].url
-    else:
-        imageURL = userinput
+def get_text_from_image(file_name, number=False):
+    """
+    Given the path to a file and uses Google Cloud Vision API to translate the image into text. Returns the JSON object
+    and a boolean describing whether the OCR was successful or not.
 
-    im = Image.open(requests.get(imageURL, stream=True).raw)
-    original = cv2.cvtColor(np.array(im), cv2.COLOR_RGB2BGR)
-    cv2.imwrite('imagefromurl.png', original)
-    file_name = os.path.abspath('imagefromurl.png')
-    with io.open(file_name, 'rb') as image_file:
-        content = image_file.read()
-
-    gearimage = vision.Image(content=content)
-    response = google_client.text_detection(image=gearimage, image_context={"language_hints": ["en"]}, )
-    if len(response.error.message) > 0:
-        return response.error.message, False
-    if bounds:
-        return response, True
-    return response.text_annotations[0].description, True
-
-
-def getTextFromUrlForThread(msgandlen):
-    return getTextFromURL(msgandlen[0], msgandlen[1])
-
-
-def getTextFromImage(filename, number=False):
-    if '' == None:
-        return 'No image was attached', False
-    file_name = os.path.abspath(filename)
+    :param file_name: A string that represents the path and filename of the image.
+    :param number: True if the OCR wants to prioritize numbers over characters.
+    :return: JSON object of the result and a boolean representing if the OCR was successful.
+    """
+    file_name = os.path.abspath(file_name)
 
     with io.open(file_name, 'rb') as image_file:
         content = image_file.read()
 
-    gearimage = vision.Image(content=content)
+    gear_image = vision.Image(content=content)
     language = "en"
     # apparently, some people experimented on stackoverflow claiming Chinese/Korean works better for reading numbers
     # than English. Kinda makes sense I guess because "O" and "0", "1" and "l" look very similar.
     if number:
         language = "zh"
-    response = google_client.text_detection(image=gearimage, image_context={"language_hints": [language]}, )
+    response = google_client.text_detection(image=gear_image, image_context={"language_hints": [language]}, )
     if len(response.error.message) > 0:
         return response.error.message, False
 
     return response, True
-
-
-def getNumberFromImage(filename):
-    return getTextFromImage(filename, True)
-
-
-def getSingleValueFromLine(line):
-    value = 0
-    for char in line:
-        if char.isdigit():
-            value *= 10
-            value += int(char)
-        if value > 0 and not char.isdigit():
-            break
-
-    return value
 
 
 def getMultiValuesFromLine(line):
@@ -419,8 +387,8 @@ def getMultiValuesFromLine(line):
             value *= 10
             value += 5
         if value and ((not line[i].isdigit() and (
-                line[i] != 'l' or line[i] != 'o' or line[i] != 'O' or line[i] != 's' or line[
-            i] != 'S')) or i + 1 == len(line)):
+                line[i] != 'l' or line[i] != 'o' or line[i] != 'O' or line[i] != 's' or line[i] != 'S')) or
+                      i + 1 == len(line)):
             listtostore.append(threedigitslong(value))
             value = 0
     return listtostore
@@ -431,100 +399,126 @@ def threedigitslong(number):
         return threedigitslong(number // 10)
     return number
 
-def minyfromvertices(vertices):
-    miny = vertices[0].y
+
+def min_y_from_vertices(vertices):
+    """
+    Given the bounding box of a text in an image, this method returns the smallest y value of the four vertices.
+
+    :param vertices: Bounding box of the text in question.
+    :return: smallest y value, representing the number of pixels from the top of the image to the top of the text.
+    """
+    min_y = vertices[0].y
     for i in range(1, 4):
-        miny = min(miny, vertices[i].y)
-    return miny
+        min_y = min(min_y, vertices[i].y)
+    return min_y
 
 
-# gets the current user from the username, if username doesn't exist then create a new user using that username
-# parameter: username of the user
-# return: user
-def getCurrentUserFromUsername(discorduser):
+def get_stored_ratios_from_username(discord_user):
+    """
+    Gets the user's ratios when given the user object. If user is not in the database, an entry will be created with
+    default ratio values and those values will be returned instead.
+
+    :param discord_user: Discord User object, usually should be message.author
+    :return: The user's ratios as a list in the following format: [discord id, secondary, tertiary, maxhp, attack,
+        all stat].
+    """
     c = conn.cursor()
-    c.execute(f"SELECT * FROM users WHERE discordid = {discorduser.id}")
+    c.execute(f"SELECT * FROM users WHERE discordid = {discord_user.id}")
     result = c.fetchone()
     if result is None:
-        sql = ("INSERT INTO users(discordid, secondary, tertiary, maxhp, attack, allstat) VALUES(?, ?, ?, ?, ?, ?)")
-        val = (discorduser.id, 0.12, 0, 0, 3, 8)
+        sql = "INSERT INTO users(discordid, secondary, tertiary, maxhp, attack, allstat) VALUES(?, ?, ?, ?, ?, ?)"
+        val = (discord_user.id, 0.12, 0, 0, 3, 8)
         c.execute(sql, val)
         conn.commit()
         c.close()
-        return getCurrentUserFromUsername(discorduser)
+        return get_stored_ratios_from_username(discord_user)
     c.close()
     return result
 
 
-# sets the specified ratio of a user's flame ratios
-# parameter: type of ratio to be set, message
-# return: message that describes the outcome of this method
-def setSpecifiedRatio(ratiotype, message):
-    currentuser = getCurrentUserFromUsername(message.author)
-    userinput = getUserInputFromCommand(message.content)
-    if not userinput:
-        if ratiotype == ' maxhp':
+def set_specified_ratio(ratio_type, message):
+    """
+    Sets the ratio specified by the message. Changes the ratio of the user that sent the message to the value that
+    is specified in the message.
+
+    :param ratio_type: String specifying which ratio is being set.
+    :param message: Discord Message object that was sent.
+    :return: Embed message that describes what changed and the user's ratios.
+    """
+    current_user = get_stored_ratios_from_username(message.author)
+    user_input = get_user_input_from_message(message.content)
+    if not user_input:
+        if ratio_type == ' maxhp':
             return 'For Kanna only: Specify a value for how much 1000 maxHP is equivalent to INT.'
-        return 'Specify a value for how much 1' + ratiotype + ' is equivalent to your main stat.'
+        return 'Specify a value for how much 1' + ratio_type + ' is equivalent to your main stat.'
 
-    testvalue = userinput.replace('.', '1')
-    if not testvalue.isdigit():
-        if ratiotype == 'maxhp':
+    number_check = user_input.replace('.', '1')
+    if not number_check.isdigit():
+        if ratio_type == 'maxhp':
             return 'For Kanna only: Specify a value for how much 1000 maxHP is equivalent to INT.'
-        return 'Specify a value for how much 1' + ratiotype + ' is equivalent to your main stat.'
+        return 'Specify a value for how much 1' + ratio_type + ' is equivalent to your main stat.'
 
-    if ratiotype == ' secondary stat':
-        sql = ("UPDATE users SET secondary = ? where discordid = ?")
-        ratiotype = 'Secondary'
+    if ratio_type == ' secondary stat':
+        sql = "UPDATE users SET secondary = ? where discordid = ?"
+        ratio_type = 'Secondary'
 
-    if ratiotype == ' tertiary stat':
-        sql = ("UPDATE users SET tertiary = ? where discordid = ?")
-        ratiotype = 'Tertiary'
+    if ratio_type == ' tertiary stat':
+        sql = "UPDATE users SET tertiary = ? where discordid = ?"
+        ratio_type = 'Tertiary'
 
-    if ratiotype == ' maxhp':
-        sql = ("UPDATE users SET maxhp = ? where discordid = ?")
-        ratiotype = 'MaxHP'
+    if ratio_type == ' maxhp':
+        sql = "UPDATE users SET maxhp = ? where discordid = ?"
+        ratio_type = 'MaxHP'
 
-    if ratiotype == ' attack':
-        sql = ("UPDATE users SET attack = ? where discordid = ?")
-        ratiotype = 'Attack'
+    if ratio_type == ' attack':
+        sql = "UPDATE users SET attack = ? where discordid = ?"
+        ratio_type = 'Attack'
 
-    if ratiotype == '% all stat':
-        sql = ("UPDATE users SET allstat = ? where discordid = ?")
-        ratiotype = 'All Stat'
+    if ratio_type == '% all stat':
+        sql = "UPDATE users SET allstat = ? where discordid = ?"
+        ratio_type = 'All Stat'
 
     c = conn.cursor()
-    val = (float(userinput), currentuser[0])
+    val = (float(user_input), current_user[0])
     c.execute(sql, val)
     conn.commit()
     c.close()
-    title = ratiotype + ' Ratio has been updated'
-    embed = getEmbedRatioFromUser(message.author, title)
-    return embed
+    title = ratio_type + ' Ratio has been updated'
+    return get_embed_ratio_of_user(message.author, title)
 
 
-def getEmbedRatioFromUser(discorduser, title='Flame Ratios'):
-    curruser = getCurrentUserFromUsername(discorduser)
-    embed = discord.Embed(title=discorduser.display_name + '\'s ' + title)
-    embed.add_field(name="Secondary Ratio", value=str(curruser[1]), inline=False)
-    embed.add_field(name="Tertiary Ratio", value=str(curruser[2]), inline=False)
-    embed.add_field(name="MaxHP Ratio", value=str(curruser[3]), inline=False)
-    embed.add_field(name="Attack Ratio", value=str(curruser[4]), inline=False)
-    embed.add_field(name="All Stat Ratio", value=str(curruser[5]), inline=False)
-    embed.set_footer(text="The following commands can be used to change the ratios: !setsecondary, !settertiary," + \
+def get_embed_ratio_of_user(discord_user, title='Flame Ratios'):
+    """
+    Creates a discord embed message of the user's ratios.
+
+    :param discord_user: Discord user object, usually from message.author.
+    :param title: Optional String to change the title on the embed message.
+    :return: Discord Embed message with the user's ratios.
+    """
+    curr_user = get_stored_ratios_from_username(discord_user)
+    embed = discord.Embed(title=discord_user.display_name + '\'s ' + title)
+    embed.add_field(name="Secondary Ratio", value=str(curr_user[1]), inline=False)
+    embed.add_field(name="Tertiary Ratio", value=str(curr_user[2]), inline=False)
+    embed.add_field(name="MaxHP Ratio", value=str(curr_user[3]), inline=False)
+    embed.add_field(name="Attack Ratio", value=str(curr_user[4]), inline=False)
+    embed.add_field(name="All Stat Ratio", value=str(curr_user[5]), inline=False)
+    embed.set_footer(text="The following commands can be used to change the ratios: !setsecondary, !settertiary," +
                           " !setmaxhp, !setattack, !setallstat")
     return embed
 
 
-# gets the custom user value the user inputs when using a command. if no value exists, will return an empty string
-# parameter: message.content, the actual string of whatever the user typed
-# return: everything after the space that separates the command from the user parameter
-def getUserInputFromCommand(message):
+def get_user_input_from_message(message):
+    """
+    Gets the custom user value the user inputs when using a command. If no value exists, it will return an empty string.
+
+    :param message: Message the user typed, given as a string.
+    :return: Everything after the space that separates the command from the user input
+    """
     result = message.split()
     if len(result) < 2:
         return ''
-    else:
-        return result[1]
+
+    return result[1]
 
 
 discord_client.run(config.TOKEN)

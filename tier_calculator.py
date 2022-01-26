@@ -5,25 +5,28 @@ def analyze_flame(equip_stats, equip_level):
     https://leetcode.com/problems/sudoku-solver/discuss/15752/Straight-Forward-Java-Solution-Using-Backtracking.
 
     :param equip_stats: A list of the equip stats in the following format: [STR, DEX, INT, LUK, MaxHP, MaxMP, Attack,
-        Magic Attack, Defense, Speed, Jump, All Stats].
+        Magic Attack, Defense, Speed, Jump, All Stats, Item Level Reduction].
     :param equip_level: An integer that represents the level of the equip.
     :return: A list of the flame tiers in the following format: [STR, DEX, INT, LUK, STR+DEX, STR+INT, STR+LUK, DEX+INT,
-        DEX+LUK, INT+LUK, MaxHP, MaxMP, Attack, Magic Attack, Defense, Speed, Jump, All Stats]. If no such flame
-        tier exists due to inaccurate equip stats or level, an empty list will be returned instead.
+        DEX+LUK, INT+LUK, MaxHP, MaxMP, Attack, Magic Attack, Defense, Speed, Jump, All Stats, Item Level Reduction].
+        If no such flame tier exists due to inaccurate equip stats or level, an empty list will be returned instead.
     """
-    
+
     # -1 implies unassigned tier, 0 implies the line does not exist on the flame
-    flame_tiers = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0]
+    flame_tiers = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
     num_of_identified_lines = 0
 
     # calculates all the flame tiers for every stat except for: str, dex, int and luk
-    for i in range(4, 12):
+    for i in range(4, 13):
         if equip_stats[i] > 0:
             num_of_identified_lines += 1
-            if i in [4, 5, 8]:
+            if i in [4, 5, 8, 12]:
                 if i == 8:
                     # multiplier for defense lines
                     factor = equip_level // 20 + 1
+                elif i == 12:
+                    # multiplier for item level reduction
+                    factor = 5
                 else:
                     # multiplier for maxhp/maxmp lines
                     factor = (equip_level // 10) * 30
@@ -50,7 +53,7 @@ def analyze_flame(equip_stats, equip_level):
     min_tier = 1
     if max(flame_tiers) > 5:
         min_tier = 3
-    
+
     current_tiers = [value for value in flame_tiers if value > 0]
     max_tier = 7
     if len(current_tiers) > 0 and min(current_tiers) < 3:
@@ -60,16 +63,15 @@ def analyze_flame(equip_stats, equip_level):
     # tier 5 on non-boss items) due to its extreme low probability of appearing. As a result, we attempt to solve the 
     # flame tiers without considering tier 7 as an option. If no solution is found, we try again including 
     # tier 7 as a possibility.
-    success = solve_flame(equip_stats, flame_tiers, num_of_identified_lines, single_stat_multiplier,
-                          pair_stat_multiplier, min_tier, max_tier, False)
-    if success:
+    if solve_flame(equip_stats, flame_tiers, num_of_identified_lines, single_stat_multiplier,
+                   pair_stat_multiplier, min_tier, max_tier, False):
         return flame_tiers
-        
+
     for x in range(10):
         flame_tiers[x] = -1
-    second_success = solve_flame(equip_stats, flame_tiers, num_of_identified_lines, single_stat_multiplier,
-                                 pair_stat_multiplier, min_tier, max_tier, True)
-    if second_success:
+
+    if solve_flame(equip_stats, flame_tiers, num_of_identified_lines, single_stat_multiplier,
+                   pair_stat_multiplier, min_tier, max_tier, True):
         return flame_tiers
     else:
         return []
@@ -100,7 +102,7 @@ def solve_flame(equip_stats, flame_tiers, num_of_identified_lines, single_stat_m
             domain = list(range(max_tier - 1 - tier_adjuster, min_tier, - 1)) + [min_tier, 0, max_tier - tier_adjuster]
             for t in domain:
                 if satisfy_constraints(equip_stats, flame_tiers, num_of_identified_lines, single_stat_multiplier,
-                                       pair_stat_multiplier, i, t):
+                                       pair_stat_multiplier, i, t, min_tier):
                     flame_tiers[i] = t
                     new_max_tier = max_tier
                     if t == 1 or t == 2:
@@ -121,7 +123,7 @@ def solve_flame(equip_stats, flame_tiers, num_of_identified_lines, single_stat_m
 
 
 def satisfy_constraints(equip_stats, flame_tiers, num_of_identified_lines, single_stat_multiplier, pair_stat_multiplier,
-                        index, tier):
+                        index, tier, min_tier):
     """
     Helper function for solve_flame(). Tests whether a specific flame line's tier is valid by satisfying the constraints
     that define a flame.
@@ -133,8 +135,9 @@ def satisfy_constraints(equip_stats, flame_tiers, num_of_identified_lines, singl
     :param num_of_identified_lines: Current number of flame tier lines that have been identified.
     :param single_stat_multiplier: Multiplier for flame tier lines with one stat.
     :param pair_stat_multiplier: Multiplier for flame tier lines with a pair of stats.
-    :param index: index for flame_tiers on which flame tier line is being tested.
-    :param tier: tier for the flame tier line that is being tested.
+    :param index: Index for flame_tiers on which flame tier line is being tested.
+    :param tier: Tier for the flame tier line that is being tested.
+    :param min_tier: The current minimum tier any line can be.
     :return: True if all constraints are satisfied, otherwise False.
     """
     # Return False if there are more than three flame tier lines already assigned. Can't have over 4 flame tier lines.
@@ -169,6 +172,8 @@ def satisfy_constraints(equip_stats, flame_tiers, num_of_identified_lines, singl
         # Return False if we have assigned a tier to every flame line and it still doesn't match the equip stats.
         if not incomplete and value != equip_stats[i]:
             return False
+        # Return False if we have assigned a tier to every flame, but 4 flames aren't assigned despite being a boss item
+        if not incomplete and min_tier == 3 and num_of_identified_lines < 4:
+            return False
 
     return True
-
