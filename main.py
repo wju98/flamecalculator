@@ -9,6 +9,7 @@ from queue import Queue
 import sqlite3
 import config
 import tier_calculator
+import util
 import numpy as np
 import cv2
 
@@ -59,7 +60,7 @@ async def on_message(message):
         debug_mode = False
         if message.content.startswith('!debug'):
             debug_mode = True
-        user_input = get_user_input_from_message(message.content)
+        user_input = util.get_user_input_from_message(message.content)
         if not message.attachments and not user_input:
             await message.channel.send('No image was attached. To use this command, attach an image with the message' +
                                        ' or include the URL of the image.')
@@ -126,7 +127,7 @@ async def on_message(message):
                     break
 
             if curr_number > 0:
-                miny = min_y_from_vertices(curr_line.bounding_poly.vertices) + top
+                miny = util.min_y_from_vertices(curr_line.bounding_poly.vertices) + top
                 min_y_to_number[miny] = curr_number
 
         if not min_y_to_number or not result.text_annotations:
@@ -159,7 +160,7 @@ async def on_message(message):
         # traverse through the remaining text in the original image to match the relevant stats to its flame values.
         while list_of_min_y and curr_min_y < target and i < len(original_text.text_annotations):
             curr_stat = original_text.text_annotations[i].description.split(':')[0].upper()
-            curr_min_y = min_y_from_vertices(original_text.text_annotations[i].bounding_poly.vertices)
+            curr_min_y = util.min_y_from_vertices(original_text.text_annotations[i].bounding_poly.vertices)
 
             for offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]:
                 offset_y = curr_min_y + offset
@@ -200,7 +201,7 @@ async def on_message(message):
             line_with_level_num = original_text.text_annotations[0].description[i:]
             i = line_with_level_num.index('\n')
             line_with_level_num = line_with_level_num[:i]
-            level_numbers = getMultiValuesFromLine(line_with_level_num)
+            level_numbers = util.get_values_from_line(line_with_level_num)
             level_number = level_numbers[0]
             if len(level_numbers) > 2 and (level_numbers[1] - level_numbers[0]) % 5 == 0 and 0 < (
                     level_numbers[1] - level_numbers[0]) < 40:
@@ -371,69 +372,24 @@ def get_text_from_image(file_name, number=False):
     return response, True
 
 
-def getMultiValuesFromLine(line):
-    value = 0
-    listtostore = []
-    for i in range(len(line)):
-        if line[i].isdigit():
-            value *= 10
-            value += int(line[i])
-        if line[i] == 'l':
-            value *= 10
-            value += 1
-        if line[i] == 'o' or line[i] == 'O':
-            value *= 10
-        if line[i] == 's' or line[i] == 'S':
-            value *= 10
-            value += 5
-        if value and ((not line[i].isdigit() and (
-                line[i] != 'l' or line[i] != 'o' or line[i] != 'O' or line[i] != 's' or line[i] != 'S')) or
-                      i + 1 == len(line)):
-            listtostore.append(threedigitslong(value))
-            value = 0
-    return listtostore
-
-
-def threedigitslong(number):
-    if number > 999:
-        return threedigitslong(number // 10)
-    return number
-
-
-def min_y_from_vertices(vertices):
+def get_embed_ratio_of_user(discord_user, title='Flame Ratios'):
     """
-    Given the bounding box of a text in an image, this method returns the smallest y value of the four vertices.
+    Creates a discord embed message of the user's ratios.
 
-    :param vertices: Bounding box of the text in question.
-    :return: smallest y value, representing the number of pixels from the top of the image to the top of the text.
+    :param discord_user: Discord user object, usually from message.author.
+    :param title: Optional String to change the title on the embed message.
+    :return: Discord Embed message with the user's ratios.
     """
-    min_y = vertices[0].y
-    for i in range(1, 4):
-        min_y = min(min_y, vertices[i].y)
-    return min_y
-
-
-def get_stored_ratios_from_username(discord_user):
-    """
-    Gets the user's ratios when given the user object. If user is not in the database, an entry will be created with
-    default ratio values and those values will be returned instead.
-
-    :param discord_user: Discord User object, usually should be message.author
-    :return: The user's ratios as a list in the following format: [discord id, secondary, tertiary, maxhp, attack,
-        all stat].
-    """
-    c = conn.cursor()
-    c.execute(f"SELECT * FROM users WHERE discordid = {discord_user.id}")
-    result = c.fetchone()
-    if result is None:
-        sql = "INSERT INTO users(discordid, secondary, tertiary, maxhp, attack, allstat) VALUES(?, ?, ?, ?, ?, ?)"
-        val = (discord_user.id, 0.12, 0, 0, 3, 8)
-        c.execute(sql, val)
-        conn.commit()
-        c.close()
-        return get_stored_ratios_from_username(discord_user)
-    c.close()
-    return result
+    curr_user = main.get_stored_ratios_from_username(discord_user)
+    embed = discord.Embed(title=discord_user.display_name + '\'s ' + title)
+    embed.add_field(name="Secondary Ratio", value=str(curr_user[1]), inline=False)
+    embed.add_field(name="Tertiary Ratio", value=str(curr_user[2]), inline=False)
+    embed.add_field(name="MaxHP Ratio", value=str(curr_user[3]), inline=False)
+    embed.add_field(name="Attack Ratio", value=str(curr_user[4]), inline=False)
+    embed.add_field(name="All Stat Ratio", value=str(curr_user[5]), inline=False)
+    embed.set_footer(text="The following commands can be used to change the ratios: !setsecondary, !settertiary," +
+                          " !setmaxhp, !setattack, !setallstat")
+    return embed
 
 
 def set_specified_ratio(ratio_type, message):
@@ -446,7 +402,7 @@ def set_specified_ratio(ratio_type, message):
     :return: Embed message that describes what changed and the user's ratios.
     """
     current_user = get_stored_ratios_from_username(message.author)
-    user_input = get_user_input_from_message(message.content)
+    user_input = util.get_user_input_from_message(message.content)
     if not user_input:
         if ratio_type == ' maxhp':
             return 'For Kanna only: Specify a value for how much 1000 maxHP is equivalent to INT.'
@@ -487,38 +443,27 @@ def set_specified_ratio(ratio_type, message):
     return get_embed_ratio_of_user(message.author, title)
 
 
-def get_embed_ratio_of_user(discord_user, title='Flame Ratios'):
+def get_stored_ratios_from_username(discord_user):
     """
-    Creates a discord embed message of the user's ratios.
+    Gets the user's ratios when given the user object. If user is not in the database, an entry will be created with
+    default ratio values and those values will be returned instead.
 
-    :param discord_user: Discord user object, usually from message.author.
-    :param title: Optional String to change the title on the embed message.
-    :return: Discord Embed message with the user's ratios.
+    :param discord_user: Discord User object, usually should be message.author
+    :return: The user's ratios as a list in the following format: [discord id, secondary, tertiary, maxhp, attack,
+        all stat].
     """
-    curr_user = get_stored_ratios_from_username(discord_user)
-    embed = discord.Embed(title=discord_user.display_name + '\'s ' + title)
-    embed.add_field(name="Secondary Ratio", value=str(curr_user[1]), inline=False)
-    embed.add_field(name="Tertiary Ratio", value=str(curr_user[2]), inline=False)
-    embed.add_field(name="MaxHP Ratio", value=str(curr_user[3]), inline=False)
-    embed.add_field(name="Attack Ratio", value=str(curr_user[4]), inline=False)
-    embed.add_field(name="All Stat Ratio", value=str(curr_user[5]), inline=False)
-    embed.set_footer(text="The following commands can be used to change the ratios: !setsecondary, !settertiary," +
-                          " !setmaxhp, !setattack, !setallstat")
-    return embed
-
-
-def get_user_input_from_message(message):
-    """
-    Gets the custom user value the user inputs when using a command. If no value exists, it will return an empty string.
-
-    :param message: Message the user typed, given as a string.
-    :return: Everything after the space that separates the command from the user input
-    """
-    result = message.split()
-    if len(result) < 2:
-        return ''
-
-    return result[1]
+    c = conn.cursor()
+    c.execute(f"SELECT * FROM users WHERE discordid = {discord_user.id}")
+    result = c.fetchone()
+    if result is None:
+        sql = "INSERT INTO users(discordid, secondary, tertiary, maxhp, attack, allstat) VALUES(?, ?, ?, ?, ?, ?)"
+        val = (discord_user.id, 0.12, 0, 0, 3, 8)
+        c.execute(sql, val)
+        conn.commit()
+        c.close()
+        return get_stored_ratios_from_username(discord_user)
+    c.close()
+    return result
 
 
 discord_client.run(config.TOKEN)
