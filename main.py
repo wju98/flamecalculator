@@ -8,6 +8,7 @@ import threading
 from queue import Queue
 import sqlite3
 import config
+import tier_calculator
 import time
 import numpy as np
 import cv2
@@ -194,7 +195,7 @@ async def on_message(message):
             if debug_mode:
                 await message.channel.send('Item Level: ' + str(levelnumber))
 
-            identifiedflame = analyzeFlame(equipstats, levelnumber)
+            identifiedflame = tier_calculator.analyze_flame(equipstats, levelnumber)
             if debug_mode:
                 await message.channel.send(identifiedflame)
 
@@ -524,138 +525,6 @@ def getUserInputFromCommand(message):
         return ''
     else:
         return result[1]
-
-
-# source for all of the flame data: https://strategywiki.org/wiki/MapleStory/Bonus_Stats
-# backtracking logic for CSP heavily inspired by https://leetcode.com/problems/sudoku-solver/discuss/15752/Straight-Forward-Java-Solution-Using-Backtracking
-# heavy optimizations are done by me tho! :)
-def analyzeFlame(equipstats, level):  # str, dex, int, luk, maxhp, maxmp, att, matt, def, speed, jump, allstat
-    flamestats = equipstats
-    # STR, DEX, INT, LUK, STR+DEX, STR+INT, STR+LUK, DEX+INT, DEX+LUK, INT+LUK, MaxHP, MaxMP, Attack, Magic Attack, Defense, Speed, Jump, All Stats
-    # -1 implies unassigned tier, 0 implies the line does not exist on the flame
-    flametiers = [-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0]
-    numberOfIdentifiedLines = 0
-
-    for i in range(4, 12):
-        if flamestats[i] > 0:
-            numberOfIdentifiedLines += 1
-            if i in [4, 5, 8]:
-                if i == 8:
-                    factor = level // 20 + 1
-                else:
-                    factor = (level // 10) * 30
-                    if factor == 0:
-                        factor = 3
-                tier = flamestats[i] // factor
-            else:
-                tier = flamestats[i]
-            flametiers[i + 6] = tier
-
-    if flamestats[0] == 0:
-        flametiers[0] = flametiers[4] = flametiers[5] = flametiers[6] = 0
-    if flamestats[1] == 0:
-        flametiers[1] = flametiers[4] = flametiers[7] = flametiers[8] = 0
-    if flamestats[2] == 0:
-        flametiers[2] = flametiers[5] = flametiers[7] = flametiers[9] = 0
-    if flamestats[3] == 0:
-        flametiers[3] = flametiers[6] = flametiers[8] = flametiers[9] = 0
-
-    singlefactor = level // 20 + 1
-    pairfactor = level // 40 + 1
-
-    mintier = max(flametiers)
-    if mintier > 5:
-        mintier = 3
-    else:
-        mintier = 1
-    currenttiers = [value for value in flametiers if value > 0]
-    if len(currenttiers) == 0:
-        maxtier = 7
-    else:
-        maxtier = min([value for value in flametiers if value > 0])
-        if maxtier < 3:
-            maxtier = 5
-        else:
-            maxtier = 7
-
-    success = solveflame(equipstats, flametiers, numberOfIdentifiedLines, singlefactor, pairfactor, mintier, maxtier, False)
-    if success:
-        return flametiers
-    else:
-        for x in range(10):
-            flametiers[x] = -1
-        second_success = solveflame(equipstats, flametiers, numberOfIdentifiedLines, singlefactor, pairfactor, mintier,
-                             maxtier, True)
-        if second_success:
-            return flametiers
-        else:
-            return []
-
-
-def solveflame(equipstats, flametiers, numberOfIdentifiedLines, singlefactor, pairfactor, mintier, maxtier, check_t7):
-    tier_adjuster = 0 if check_t7 else 1
-    variables = list(range(4, 10)) + list(range(4))
-    #variables = list(range(10))
-    for i in variables:
-        if flametiers[i] == -1:
-            #domain = [0] + list(range(maxtier - 1, mintier, - 1)) + [mintier, maxtier]
-            #domain = [0] + list(range(mintier + 1, maxtier)) + [mintier, maxtier]
-            domain = list(range(maxtier - 1 - tier_adjuster, mintier, - 1)) + [mintier, 0, maxtier - tier_adjuster]
-            for t in domain:
-                if satisfyConstraints(equipstats, flametiers, numberOfIdentifiedLines, singlefactor, pairfactor, i, t):
-                    flametiers[i] = t
-                    if t == 1 or t == 2:
-                        newmaxtier = 5 - tier_adjuster
-                    else:
-                        newmaxtier = maxtier
-                    if t == 6 or t == 7:
-                        newmintier = 3
-                    else:
-                        newmintier = mintier
-                    numlines = numberOfIdentifiedLines
-                    if t > 0:
-                        numlines += 1
-                    if solveflame(equipstats, flametiers, numlines, singlefactor, pairfactor, newmintier, newmaxtier, check_t7):
-                        return True
-                    else:
-                        flametiers[i] = -1
-            return False
-    return True
-
-
-# constraints are based off my knowledge of the game and understanding of the limitation of flames, cuz i play this game
-# too much and know too much about this game LOL
-def satisfyConstraints(equipstats, flametiers, numberOfIdentifiedLines, singlefactor, pairfactor, i, t):
-    if numberOfIdentifiedLines > 3 and t > 0:
-        return False
-
-    stattopair = [[4, 5, 6], [4, 7, 8], [5, 7, 9], [6, 8, 9]]
-
-    for a in range(4):
-        incomplete = False
-        value = 0
-        if i == a:
-            value = singlefactor * t
-        else:
-            if flametiers[a] == -1:
-                incomplete = True
-            else:
-                value = singlefactor * flametiers[a]
-        for x in stattopair[a]:
-            if i == x:
-                value += t * pairfactor
-            else:
-                if flametiers[x] != -1:
-                    value += flametiers[x] * pairfactor
-                else:
-                    incomplete = True
-
-        if equipstats[a] < value:
-            return False
-        if not incomplete and value != equipstats[a]:
-            return False
-
-    return True
 
 
 discord_client.run(config.TOKEN)
