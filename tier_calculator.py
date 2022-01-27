@@ -87,7 +87,8 @@ def solve_flame(equip_stats, flame_tiers, num_of_identified_lines, single_stat_m
         Magic Attack, Defense, Speed, Jump, All Stats].
     :param flame_tiers: A list of the flame tiers in the following format: [STR, DEX, INT, LUK, STR+DEX, STR+INT,
         STR+LUK, DEX+INT, DEX+LUK, INT+LUK, MaxHP, MaxMP, Attack, Magic Attack, Defense, Speed, Jump, All Stats].
-    :param num_of_identified_lines: Current number of flame tier lines that have been identified.
+    :param num_of_identified_lines: Current number of flame tier lines that have been identified, not including the
+        current flame tier line in question.
     :param single_stat_multiplier: Multiplier for flame tier lines with one stat.
     :param pair_stat_multiplier: Multiplier for flame tier lines with a pair of stats. 
     :param min_tier: Current smallest number a flame tier can be.
@@ -173,7 +174,7 @@ def satisfy_constraints(equip_stats, flame_tiers, num_of_identified_lines, singl
         if not incomplete and value != equip_stats[i]:
             return False
         # Return False if we have assigned a tier to every flame, but 4 flames aren't assigned despite being a boss item
-        if not incomplete and min_tier == 3 and num_of_identified_lines < 4:
+        if not incomplete and min_tier == 3 and num_of_identified_lines < 3:
             return False
 
     return True

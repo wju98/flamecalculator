@@ -13,7 +13,7 @@ import util
 import numpy as np
 import cv2
 
-os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = r'equipstatreaderkey.json'
+os.environ['GOOGLE_APPLICATION_CREDENTIALS'] = config.file_path
 google_client = vision.ImageAnnotatorClient()
 discord_client = discord.Client()
 conn = sqlite3.connect('users.db')
@@ -284,7 +284,7 @@ async def on_message(message):
         return
 
     if message.content.startswith('!botstatistics'):
-        if message.author.id != 258064566456549387:
+        if message.author.id != config.owner:
             return
         c = conn.cursor()
         c.execute("SELECT COUNT(*) FROM users")
