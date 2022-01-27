@@ -380,7 +380,7 @@ def get_embed_ratio_of_user(discord_user, title='Flame Ratios'):
     :param title: Optional String to change the title on the embed message.
     :return: Discord Embed message with the user's ratios.
     """
-    curr_user = main.get_stored_ratios_from_username(discord_user)
+    curr_user = get_stored_ratios_from_username(discord_user)
     embed = discord.Embed(title=discord_user.display_name + '\'s ' + title)
     embed.add_field(name="Secondary Ratio", value=str(curr_user[1]), inline=False)
     embed.add_field(name="Tertiary Ratio", value=str(curr_user[2]), inline=False)
