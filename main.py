@@ -360,12 +360,12 @@ def get_text_from_image(file_name, number=False):
         content = image_file.read()
 
     gear_image = vision.Image(content=content)
-    language = "en"
     # apparently, some people experimented on stackoverflow claiming Chinese/Korean works better for reading numbers
     # than English. Kinda makes sense I guess because "O" and "0", "1" and "l" look very similar.
     if number:
-        language = "zh"
-    response = google_client.text_detection(image=gear_image, image_context={"language_hints": [language]}, )
+        response = google_client.text_detection(image=gear_image, image_context={"language_hints": ["zh"]}, )
+    else:
+        response = google_client.document_text_detection(image=gear_image)
     if len(response.error.message) > 0:
         return response.error.message, False
 

@@ -173,8 +173,5 @@ def satisfy_constraints(equip_stats, flame_tiers, num_of_identified_lines, singl
         # Return False if we have assigned a tier to every flame line and it still doesn't match the equip stats.
         if not incomplete and value != equip_stats[i]:
             return False
-        # Return False if we have assigned a tier to every flame, but 4 flames aren't assigned despite being a boss item
-        if not incomplete and min_tier == 3 and num_of_identified_lines < 3:
-            return False
 
     return True
