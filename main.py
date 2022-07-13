@@ -94,8 +94,9 @@ async def on_message(message):
         letterY, letterX = np.where(np.all(res != [0, 0, 0], axis=2))
         res = cv2.cvtColor(res, cv2.COLOR_HSV2BGR)
         try:
-            top, bottom = max(np.amin(letterY) - 3, 0), min(np.amax(letterY) + 3, height)
-            left, right = max(np.amin(letterX) - 3, 0), min(np.amax(letterX) + 3, width)
+            border = 5
+            top, bottom = max(np.amin(letterY) - border, 0), min(np.amax(letterY) + border, height)
+            left, right = max(np.amin(letterX) - border, 0), min(np.amax(letterX) + border, width)
         except Exception:
             await message.channel.send('No flame was detected.')
             return
