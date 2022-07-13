@@ -147,22 +147,22 @@ async def on_message(message):
 
         list_of_min_y = min_y_to_number.keys()
         num_of_flame_values = len(list_of_min_y)
-        target = min(list_of_min_y) - 5
+        min_target = min(list_of_min_y) - 5
+        max_target = max(list_of_min_y) + 5
         curr_min_y = 0
         i = 0
         # traverse curr_min_y to where the first flame value appears in the original image
-        while curr_min_y < target:
+        while curr_min_y < min_target or curr_min_y > max_target:
             i += 1
             curr_min_y = original_text.text_annotations[i].bounding_poly.vertices[0].y
 
         stat_to_flame_value = {}
-        target = max(list_of_min_y) + 5
         # traverse through the remaining text in the original image to match the relevant stats to its flame values.
-        while list_of_min_y and curr_min_y < target and i < len(original_text.text_annotations):
+        while list_of_min_y and i < len(original_text.text_annotations):
             curr_stat = original_text.text_annotations[i].description.split(':')[0].upper()
             curr_min_y = util.min_y_from_vertices(original_text.text_annotations[i].bounding_poly.vertices)
 
-            for offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5]:
+            for offset in [0, -1, 1, -2, 2, -3, 3, -4, 4, -5, 5, -6, 6, -7, 7]:
                 offset_y = curr_min_y + offset
                 if offset_y in list_of_min_y:
                     if curr_stat in check_stats and curr_stat not in stat_to_flame_value.keys():
