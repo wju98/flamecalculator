@@ -17,19 +17,25 @@ def analyze_flame(equip_stats, equip_level):
     num_of_identified_lines = 0
 
     # calculates all the flame tiers for every stat except for: str, dex, int and luk
+    """
+    in the recent update, nexon changed the linear scaling of flames post lvl 200 items, it is difficult to tell
+    as of 11/3/2022 whether it will follow a different linear trend or not, however, for now the code will be updated
+    to work for the current gear plus the future lvl 250 gear set. Anything beyond that will not work and will have to
+    be manually updated, but that probably will not come for years.
+    """
     for i in range(4, 13):
         if equip_stats[i] > 0:
             num_of_identified_lines += 1
             if i in [4, 5, 8, 12]:
                 if i == 8:
                     # multiplier for defense lines
-                    factor = equip_level // 20 + 1
+                    factor = min(equip_level // 20 + 1, 12)
                 elif i == 12:
                     # multiplier for item level reduction
                     factor = 5
                 else:
                     # multiplier for maxhp/maxmp lines
-                    factor = (equip_level // 10) * 30
+                    factor = min((equip_level // 10) * 30, 700)
                     if factor == 0:
                         factor = 3
                 tier = equip_stats[i] // factor
@@ -47,8 +53,8 @@ def analyze_flame(equip_stats, equip_level):
     if equip_stats[3] == 0:
         flame_tiers[3] = flame_tiers[6] = flame_tiers[8] = flame_tiers[9] = 0
 
-    single_stat_multiplier = equip_level // 20 + 1
-    pair_stat_multiplier = equip_level // 40 + 1
+    single_stat_multiplier = min(equip_level // 20 + 1, 12)
+    pair_stat_multiplier = min(equip_level // 40 + 1, 7)
 
     min_tier = 1
     if max(flame_tiers) > 5:
