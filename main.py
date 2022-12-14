@@ -363,10 +363,14 @@ def get_text_from_image(file_name, number=False):
     gear_image = vision.Image(content=content)
     # apparently, some people experimented on stackoverflow claiming Chinese/Korean works better for reading numbers
     # than English. Kinda makes sense I guess because "O" and "0", "1" and "l" look very similar.
-    if number:
-        response = google_client.text_detection(image=gear_image, image_context={"language_hints": ["zh"]}, )
-    else:
-        response = google_client.document_text_detection(image=gear_image)
+    try:
+        if number:
+            response = google_client.text_detection(image=gear_image, image_context={"language_hints": ["zh"]}, )
+        else:
+            response = google_client.document_text_detection(image=gear_image)
+    except:
+        # catching any error from here to prevent bot from crashing
+        return "google 503 service unavailable error", False
     if len(response.error.message) > 0:
         return response.error.message, False
 
